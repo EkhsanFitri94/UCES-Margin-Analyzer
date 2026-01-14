@@ -3,8 +3,9 @@ import pandas as pd
 import io
 import os
 import json
+from datetime import date
 from openpyxl import load_workbook
-from openpyxl.styles import Protection, PatternFill
+from openpyxl.styles import Protection, PatternFill, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -37,34 +38,41 @@ st.markdown("""
         border: 1px solid #ddd;
         margin-bottom: 20px;
     }
-    .item-card {
-        background-color: #f8f9fa;
-        border: 1px solid #e9ecef;
+    .legend-box {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background-color: white;
+        padding: 10px;
         border-radius: 5px;
-        padding: 8px;
-        margin-bottom: 5px;
-        font-size: 0.9em;
+        border: 1px solid #ddd;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# --- PERSISTENCE FUNCTIONS (SAFE MODE) ---
+# --- PERSISTENCE FUNCTIONS (JSON VERSION) ---
 DATA_FILE = os.path.join(os.getcwd(), "uces_app_data.json")
 
 def save_data():
     """Saves current state to JSON file."""
+    df_to_save = st.session_state.df.copy()
+    # Convert date objects to string for JSON serialization
+    if 'Date of PR' in df_to_save.columns:
+        df_to_save['Date of PR'] = df_to_save['Date of PR'].astype(str)
+    # Convert Margin Reason to string
+    if 'Margin Reason' in df_to_save.columns:
+        df_to_save['Margin Reason'] = df_to_save['Margin Reason'].astype(str)
+        
     data_to_save = {
-        'df': st.session_state.df.to_dict(orient='records'),
-        'line_items_db': st.session_state.line_items_db,
+        'df': df_to_save.to_dict(orient='records'),
         'source_filename': st.session_state.source_filename
     }
     try:
         with open(DATA_FILE, "w") as f:
             json.dump(data_to_save, f)
     except Exception as e:
-        # SAFE MODE: If we can't save (e.g. on GitHub server), just ignore it.
-        # Don't show error to user to avoid confusion.
-        pass
+        pass 
 
 def load_data():
     """Loads data from JSON file if it exists."""
@@ -75,7 +83,6 @@ def load_data():
                 df = pd.DataFrame(data['df'])
                 return {
                     'df': df,
-                    'line_items_db': data['line_items_db'],
                     'source_filename': data['source_filename']
                 }
         except Exception:
@@ -85,9 +92,9 @@ def load_data():
 # --- Helper Function: Initialize DF ---
 def init_df():
     return pd.DataFrame(columns=[
-        "Quotation No", "Po Huawei", "Linked PR Subcon", "Vendor Name", "Project", "Site ID", "Line Items",
+        "Quotation No", "Po Huawei", "Linked PR Subcon", "Date of PR", "Vendor Name", "Project", "Site ID", "Line Items",
         "Po Huawei (Unit Price)", "Requested Qty", "Total", 
-        "Po Subcon (Unit Price)", "Qty", "Sub Total", "Profit", "Margin%", "Status"
+        "Po Subcon (Unit Price)", "Qty", "Sub Total", "Profit", "Margin%", "Status", "Margin Reason"
     ])
 
 # --- Initialize Session State ---
@@ -95,13 +102,9 @@ if 'df' not in st.session_state:
     saved_data = load_data()
     if saved_data:
         st.session_state.df = saved_data['df']
-        st.session_state.line_items_db = saved_data['line_items_db']
         st.session_state.source_filename = saved_data['source_filename']
     else:
         st.session_state.df = init_df()
-        st.session_state.line_items_db = [
-            "Router X5", "Cable 10m", "Antenna Panel", "SIM Card", "Power Adapter"
-        ]
         st.session_state.source_filename = "master_file_data.xlsx"
 
 # Define Project Options
@@ -125,50 +128,17 @@ PROJECT_KEYS = list(PROJECT_OPTIONS.keys())
 st.title("📊 UCES Margin Analyzer")
 st.markdown("Check Client PO vs Subcon PO Margins (Target: ≥30%)")
 
-# --- Section: Settings (Reset) ---
-with st.expander("⚙️ System Settings", expanded=False):
-    st.write("Manage local application data.")
-    if st.button("🗑️ Reset App Data (Clear Cache)", type="secondary"):
-        if os.path.exists(DATA_FILE):
-            os.remove(DATA_FILE)
-            st.success("App data cleared! Refresh page to start fresh.")
-            st.rerun()
-    st.caption("Clears the saved Line Items and current table state.")
-
-# --- Section: Manage Line Items ---
-with st.expander("🛠️ Manage Line Items (Database)", expanded=False):
-    st.write("Add standard items here. They will appear in the dropdown when adding new entries.")
-    
-    m_col1, m_col2 = st.columns([2, 1])
-    with m_col1:
-        new_item = st.text_input("New Line Item Name", placeholder="e.g., Router X5")
-    with m_col2:
-        if st.button("➕ Add to Database", use_container_width=True):
-            if new_item and new_item not in st.session_state.line_items_db:
-                st.session_state.line_items_db.append(new_item)
-                save_data() 
-                st.success(f"'{new_item}' added!")
-                st.rerun()
-            elif new_item in st.session_state.line_items_db:
-                st.warning("Item already exists!")
-    
-    st.divider()
-    st.write("**Current Database:**")
-    
-    items_grid_cols = st.columns(4)
-    for i, item in enumerate(st.session_state.line_items_db):
-        with items_grid_cols[i % 4]:
-            d_col1, d_col2 = st.columns([3, 1])
-            with d_col1:
-                st.markdown(f"<div class='item-card'>{item}</div>", unsafe_allow_html=True)
-            with d_col2:
-                if st.button("🗑️", key=f"del_item_{i}", help="Delete this item"):
-                    st.session_state.line_items_db.pop(i)
-                    save_data() 
-                    st.rerun()
-    
-    if len(st.session_state.line_items_db) == 0:
-        st.info("Database is empty.")
+# --- STICKY LEGEND (EXPLANATION OF COLORS) ---
+with st.container():
+    st.markdown('<div class="legend-box">', unsafe_allow_html=True)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("### 🟢 ≥ 30% (Healthy)")
+    with c2:
+        st.markdown("### 🟡 20–29% (Below Target)")
+    with c3:
+        st.markdown("### 🔴 < 20% (Loss Risk)")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 # --- Section 1: Upload Excel ---
 with st.expander("📥 Step 1: Load Existing Excel File", expanded=False):
@@ -189,6 +159,13 @@ with st.expander("📥 Step 1: Load Existing Excel File", expanded=False):
                 if cols_match and len(temp_df) > 0:
                     col_map = {x.lower(): x for x in required}
                     temp_df.columns = [col_map.get(str(c).lower(), c) for c in temp_df.columns]
+                    
+                    # FORCE TYPE CASTING: Ensure 'Date of PR' is datetime
+                    if 'Date of PR' in temp_df.columns:
+                        temp_df['Date of PR'] = pd.to_datetime(temp_df['Date of PR'], errors='coerce')
+                    
+                    # Fill NaN with empty strings to prevent crashes
+                    temp_df = temp_df.fillna("")
                     
                     st.session_state.df = temp_df[required]
                     st.session_state.source_filename = uploaded_file.name
@@ -224,6 +201,9 @@ with st.expander("📥 Step 1: Load Existing Excel File", expanded=False):
                             else:
                                 if app_col == "Status": final_df[app_col] = "Process"
                                 elif app_col == "Project": final_df[app_col] = "---"
+                                elif app_col == "Margin Status": final_df[app_col] = ""
+                                elif app_col == "Margin Reason": final_df[app_col] = ""
+                                elif app_col == "Date of PR": final_df[app_col] = ""
                                 elif app_col in ["Po Huawei (Unit Price)", "Po Subcon (Unit Price)", "Total", "Sub Total", "Profit", "Margin%"]: final_df[app_col] = 0.0
                                 elif app_col in ["Requested Qty", "Qty"]: final_df[app_col] = 0
                                 else: final_df[app_col] = ""
@@ -247,35 +227,52 @@ form_mode = "✏️ Edit Entry" if st.session_state.edit_index is not None else 
 with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not None)):
     
     if st.session_state.edit_index is not None:
-        row_data = st.session_state.df.iloc[st.session_state.edit_index]
-        current_project = row_data["Project"]
-        if current_project in PROJECT_KEYS:
+        # ATOMIC FIX: Deep copy to ensure independence
+        row_data = st.session_state.df.iloc[st.session_state.edit_index].copy(deep=True)
+        
+        current_project = row_data.get("Project", "---")
+        if current_project != "---" and current_project in PROJECT_OPTIONS:
             proj_default = current_project
         else:
             proj_default = "---" 
 
+        # SAFE DATE RETRIEVAL
+        raw_date_val = row_data.get("Date of PR")
+        safe_date_val = date.today()
+        
+        if pd.notna(raw_date_val):
+            if isinstance(raw_date_val, str):
+                try:
+                    safe_date_val = pd.to_datetime(raw_date_val, errors='coerce', dayfirst=True).to_pydatetime()
+                except:
+                    pass 
+
+        # ROBUST DEFAULTS DICT (Always define all keys)
         default_vals = {
-            "quotation_no": row_data["Quotation No"],
-            "po_huawei": row_data["Po Huawei"],
-            "linked_pr": row_data["Linked PR Subcon"],
-            "vendor_name": row_data["Vendor Name"],
+            "quotation_no": str(row_data.get("Quotation No", "")),
+            "po_huawei": str(row_data.get("Po Huawei", "")),
+            "linked_pr": str(row_data.get("Linked PR Subcon", "")),
+            "date_pr": safe_date_val,
+            "vendor_name": str(row_data.get("Vendor Name", "")),
             "project": proj_default,
-            "site_id": row_data["Site ID"],
-            "line_items": row_data["Line Items"],
-            "status": row_data["Status"],
-            "hp": float(row_data["Po Huawei (Unit Price)"]),
-            "rq": int(row_data["Requested Qty"]),
-            "sp": float(row_data["Po Subcon (Unit Price)"]),
-            "sq": int(row_data["Qty"]),
+            "site_id": str(row_data.get("Site ID", "")),
+            "line_items": str(row_data.get("Line Items", "")),
+            "margin_reason": str(row_data.get("Margin Reason", "")), # Safe .get() for Edit mode
+            "status": row_data.get("Status", "Waiting"),
+            "hp": float(row_data.get("Po Huawei (Unit Price)", 0.0)),
+            "rq": int(row_data.get("Requested Qty", 0)),
+            "sp": float(row_data.get("Po Subcon (Unit Price)", 0.0)),
+            "sq": int(row_data.get("Qty", 0)),
         }
         btn_text = "💾 Update Row"
         btn_type = "primary"
     else:
+        # ADD MODE: Defaults
         default_vals = {
             "quotation_no": "",
-            "po_huawei": "", "linked_pr": "", "vendor_name": "",
-            "project": "---", "site_id": "", "line_items": "", 
-            "status": "Process",
+            "po_huawei": "", "linked_pr": "", "date_pr": date.today(),
+            "vendor_name": "", "project": "---", "site_id": "", "line_items": "", "margin_reason": "", # Empty string for Add mode
+            "status": "Waiting",
             "hp": 0.0, "rq": 0, "sp": 0.0, "sq": 0
         }
         btn_text = "➕ Add to Table"
@@ -290,40 +287,32 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
             po_huawei = st.text_input("PO Huawei*", value=default_vals["po_huawei"])
             linked_pr = st.text_input("Linked PR Subcon", value=default_vals["linked_pr"])
             
-            project = st.selectbox("Project", PROJECT_KEYS, 
-                                  index=PROJECT_KEYS.index(default_vals["project"]) if default_vals["project"] in PROJECT_KEYS else 0,
-                                  format_func=lambda x: f"{x} = {PROJECT_OPTIONS[x]}")
+            date_pr = st.date_input("Date of PR", value=default_vals["date_pr"], format="DD/MM/YYYY")
         
         with col2:
             vendor_name = st.text_input("Vendor Name", value=default_vals["vendor_name"])
             
             site_id = st.text_input("Site ID", value=default_vals["site_id"])
             
-            line_item_options = ["(Custom...)"] + st.session_state.line_items_db
-            
-            default_li_index = 0
-            try:
-                if default_vals["line_items"] in line_item_options:
-                    default_li_index = line_item_options.index(default_vals["line_items"])
-            except:
-                default_li_index = 0
-
-            selected_line_item = st.selectbox("Line Items", line_item_options, index=default_li_index)
-            
-            if selected_line_item == "(Custom...)":
-                final_line_item = st.text_input("Type Custom Item", value=default_vals["line_items"])
-            else:
-                final_line_item = selected_line_item
-            
-            status = st.selectbox("Status", ["Process", "Rejected", "Claimed", "Waiting"], 
-                                  index=["Process", "Rejected", "Claimed", "Waiting"].index(default_vals["status"]) if default_vals["status"] in ["Process", "Rejected", "Claimed", "Waiting"] else 0)
+            status = st.selectbox("Status", ["Waiting", "Process", "Rejected", "Claimed"], 
+                                  index=["Waiting", "Process", "Rejected", "Claimed"].index(default_vals["status"]) if default_vals["status"] in ["Waiting", "Process", "Rejected", "Claimed"] else 0)
         
         with col3:
             st.subheader("Financials")
+            
+            project = st.selectbox("Project", PROJECT_KEYS, 
+                                  index=PROJECT_KEYS.index(default_vals["project"]) if default_vals["project"] in PROJECT_KEYS else 0,
+                                  format_func=lambda x: f"{x} = {PROJECT_OPTIONS[x]}")
+            
+            final_line_item = st.text_input("Line Items", value=default_vals["line_items"], placeholder="e.g. Router X5")
+            
             po_huawei_price = st.number_input("PO Huawei (Unit Price)", value=default_vals["hp"], format="%.2f")
             req_qty = st.number_input("Requested Qty", value=default_vals["rq"], step=1)
             po_subcon_price = st.number_input("PO Subcon (Unit Price)", value=default_vals["sp"], format="%.2f")
             subcon_qty = st.number_input("Qty (Subcon)", value=default_vals["sq"], step=1)
+
+            # MOVED HERE: Margin Reason Text Area (Visible in Financials section)
+            margin_reason = st.text_area("Margin Reason", value=default_vals["margin_reason"], placeholder="e.g. Vendor raised price...", height=70)
 
         submitted = st.form_submit_button(btn_text, type=btn_type)
         cancel_edit = st.form_submit_button("Cancel Edit") if st.session_state.edit_index is not None else None
@@ -337,10 +326,35 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
                 profit = total_huawei - total_subcon
                 margin = (profit / total_huawei * 100) if total_huawei != 0 else 0.0
 
+                # --- AUTO-FLAG LOGIC ---
+                if margin >= 30.0:
+                    margin_status = "Healthy"
+                    is_low_margin = False
+                    is_high_margin = True
+                elif margin >= 20.0:
+                    margin_status = "Below Target"
+                    is_low_margin = True
+                    is_high_margin = False
+                else:
+                    margin_status = "Loss Risk"
+                    is_low_margin = True
+                    is_high_margin = False
+
+                # IF EDIT MODE: Check Reason. IF ADD MODE: Default to 'Loss Risk'
+                if st.session_state.edit_index is not None:
+                    # In Edit mode, 'margin_reason' exists in default_vals
+                    final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
+                else:
+                    # In Add mode, 'margin_reason' is empty in default_vals
+                    # We default margin_status to 'Loss Risk' to prevent checking empty vars
+                    margin_status = "Loss Risk"
+                    final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
+
                 new_row = {
                     "Quotation No": quotation_no,
                     "Po Huawei": po_huawei,
                     "Linked PR Subcon": linked_pr,
+                    "Date of PR": date_pr,
                     "Vendor Name": vendor_name,
                     "Project": project,
                     "Site ID": site_id,
@@ -353,7 +367,8 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
                     "Sub Total": total_subcon,
                     "Profit": profit,
                     "Margin%": round(margin, 2),
-                    "Status": status
+                    "Status": final_status_text,
+                    "Margin Reason": margin_reason
                 }
 
                 if st.session_state.edit_index is not None:
@@ -375,56 +390,84 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
 st.divider()
 st.subheader("Current Master File Data")
 
-if not st.session_state.df.empty:
-    
+# --- FILTERS SECTION ---
+with st.container():
     st.markdown('<div class="filter-container">', unsafe_allow_html=True)
     
-    f_col1, f_col2, f_col3, f_col4 = st.columns([1, 1, 1, 1])
+    # Row 1: Status
+    filter_status = st.selectbox("🔍 Filter by Status", ["All", "Waiting", "Process", "Rejected", "Claimed"])
     
-    with f_col1:
-        status_filter = st.selectbox("Filter by Status", ["All", "Process", "Rejected", "Claimed", "Waiting"])
+    # Row 2: Text Filters (Project, Vendor, Site ID)
+    col_2a, col_2b, col_2c = st.columns(3)
+    with col_2a:
+        search_project = st.text_input("🔍 Project Code", placeholder="e.g. BD, SOLAR")
+    with col_2b:
+        search_vendor = st.text_input("🔍 Vendor Name", placeholder="Vendor Name")
+    with col_2c:
+        search_site = st.text_input("🔍 Site ID", placeholder="Site ID")
     
-    with f_col2:
-        search_project = st.text_input("Search Project Code (e.g., BD, SOLAR)")
-        
-    with f_col3:
-        margin_filter = st.selectbox("Filter by Margin", ["All", "High Margin (≥30%)", "Low Margin (<30%)"])
-        
-    with f_col4:
-        if st.button("🔄 Reset Filters"):
-            st.rerun()
+    # Row 3: Margin Filter
+    margin_filter = st.selectbox("🔍 Filter by Margin", ["All", "Loss Risk (<20%)", "Below Target (20-29%)", "Healthy (≥30%)"])
+    
+    # Row 4: Reset Button
+    if st.button("🔄 Reset All Filters"):
+        st.rerun()
             
     st.markdown('</div>', unsafe_allow_html=True)
 
+if not st.session_state.df.empty:
+    # FILTER LOGIC
     filtered_df = st.session_state.df.copy()
     
-    if status_filter != "All":
-        filtered_df = filtered_df[filtered_df["Status"] == status_filter]
+    if filter_status != "All":
+        filtered_df = filtered_df[filtered_df["Status"] == filter_status]
     
-    if search_project:
+    if search_project and not filtered_df.empty:
         filtered_df = filtered_df[filtered_df["Project"].str.contains(search_project, case=False, na=False)]
+            
+    if search_vendor and not filtered_df.empty:
+        filtered_df = filtered_df[filtered_df["Vendor Name"].str.contains(search_vendor, case=False, na=False)]
     
-    if margin_filter == "High Margin (≥30%)":
+    if search_site and not filtered_df.empty:
+        filtered_df = filtered_df[filtered_df["Site ID"].str.contains(search_site, case=False, na=False)]
+    
+    if margin_filter == "Loss Risk (<20%)":
+        filtered_df = filtered_df[filtered_df["Margin%"] < 20.0]
+    elif margin_filter == "Below Target (20-29%)":
+        filtered_df = filtered_df[(filtered_df["Margin%"] >= 20.0) & (filtered_df["Margin%"] < 30.0)]
+    elif margin_filter == "Healthy (≥30%)":
         filtered_df = filtered_df[filtered_df["Margin%"] >= 30.0]
-    elif margin_filter == "Low Margin (<30%)":
-        filtered_df = filtered_df[filtered_df["Margin%"] < 30.0]
         
     st.caption(f"Showing {len(filtered_df)} of {len(st.session_state.df)} records")
 
+    # TABLE STYLING
     def color_margin(val):
         try:
             val_float = float(val)
             if val_float >= 30.0:
-                color = 'green'
+                return 'background-color: #d1fae5; color: green; font-weight: bold' # Healthy (Green)
+            elif val_float >= 20.0:
+                return 'background-color: #fff3cd; color: #856404; font-weight: bold' # Warning (Yellow-Orange)
             else:
-                color = 'red'
-            return f'color: {color}; font-weight: bold'
+                return 'background-color: #f8d7da; color: white; font-weight: bold' # Risk (Red background, white text)
+        except:
+            return ''
+
+    def color_text(val):
+        # Color text itself (Dark Green vs Dark Red) based on margin
+        try:
+            val_float = float(val)
+            if val_float >= 30.0:
+                return 'color: #006400' # Dark Green
+            else:
+                return 'color: #dc2626' # Dark Red
         except:
             return 'color: black'
 
-    styled_df = filtered_df.style.applymap(color_margin, subset=['Margin%'])
+    styled_df = filtered_df.style.applymap(color_margin, subset=['Margin%']).applymap(color_text, subset=['Margin%'])
     
     column_config = {
+        "Date of PR": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
         "Po Huawei (Unit Price)": st.column_config.NumberColumn("Price (RM)", format="%.2f"),
         "Requested Qty": st.column_config.NumberColumn("Req Qty", format="%d"), 
         "Total": st.column_config.NumberColumn("Total (RM)", format="%.2f"),
@@ -433,6 +476,8 @@ if not st.session_state.df.empty:
         "Sub Total": st.column_config.NumberColumn("Sub Total (RM)", format="%.2f"),
         "Profit": st.column_config.NumberColumn("Profit (RM)", format="%.2f"),
         "Margin%": st.column_config.NumberColumn("Margin%", format="%.2f"),
+        "Status": st.column_config.TextColumn("Status", width="medium"),
+        "Margin Reason": st.column_config.TextColumn("Reason", width="large"),
         "Project": st.column_config.SelectboxColumn(
             "Project",
             options=PROJECT_KEYS,
@@ -447,6 +492,7 @@ if not st.session_state.df.empty:
         column_config=column_config
     )
 
+    st.markdown("---")
     st.markdown("### Quick Actions")
     action_col1, action_col2, action_col3 = st.columns([2, 1, 1])
     
@@ -476,7 +522,7 @@ else:
 st.divider()
 
 st.markdown("### 💾 Save Your Work")
-st.info("Download your updated Excel file here. (Note: If running on GitHub, data is temporary and will reset on refresh).")
+st.info("Download your updated Excel file here.")
 
 col_dl, col_clr = st.columns(2)
 
@@ -489,7 +535,8 @@ with col_dl:
         worksheet = workbook['Master File']
         
         green_fill = PatternFill(start_color="C6F6D5", end_color="C6F6D5", fill_type="solid")
-        red_fill = PatternFill(start_color="FED7D7", end_color="FED7D7", fill_type="solid")
+        yellow_orange_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+        red_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
         
         col_indices = {}
         for col in range(1, worksheet.max_column + 1):
@@ -498,6 +545,8 @@ with col_dl:
                 col_indices[header_val] = col
         
         margin_col_idx = col_indices.get("Margin%")
+        status_col_idx = col_indices.get("Status")
+        reason_col_idx = col_indices.get("Margin Reason")
         
         project_col_letter = None
         for k, v in col_indices.items():
@@ -535,10 +584,17 @@ with col_dl:
                         val = float(cell.value)
                         if val >= 30.0:
                             cell.fill = green_fill
+                            cell.font = Font(color="006400", bold=True)
+                        elif val >= 20.0:
+                            cell.fill = yellow_orange_fill
+                            cell.font = Font(color="856404", bold=True)
                         else:
                             cell.fill = red_fill
+                            cell.font = Font(color="FFFFFF", bold=True) # White text on red
                     except:
                         pass
+                elif cell_header == "Date of PR":
+                    cell.number_format = 'DD/MM/YYYY'
                 else:
                     cell.number_format = 'General'
 
