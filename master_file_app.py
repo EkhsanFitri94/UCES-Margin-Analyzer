@@ -57,9 +57,9 @@ DATA_FILE = os.path.join(os.getcwd(), "uces_app_data.json")
 def save_data():
     """Saves current state to JSON file."""
     df_to_save = st.session_state.df.copy()
+    # Convert date objects to string for JSON serialization
     if 'Date of PR' in df_to_save.columns:
         df_to_save['Date of PR'] = df_to_save['Date of PR'].astype(str)
-    
     # Convert Margin Reason to string
     if 'Margin Reason' in df_to_save.columns:
         df_to_save['Margin Reason'] = df_to_save['Margin Reason'].astype(str)
@@ -227,7 +227,8 @@ form_mode = "✏️ Edit Entry" if st.session_state.edit_index is not None else 
 with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not None)):
     
     if st.session_state.edit_index is not None:
-        row_data = st.session_state.df.iloc[st.session_state.edit_index]
+        # ATOMIC FIX: Deep copy to ensure independence
+        row_data = st.session_state.df.iloc[st.session_state.edit_index].copy(deep=True)
         
         current_project = row_data.get("Project", "---")
         if current_project != "---" and current_project in PROJECT_OPTIONS:
@@ -239,25 +240,24 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
         raw_date_val = row_data.get("Date of PR")
         safe_date_val = date.today()
         
-        # If value is not None and is a string/series, try to parse
         if pd.notna(raw_date_val):
             if isinstance(raw_date_val, str):
                 try:
-                    safe_date_val = pd.to_datetime(raw_date_val, errors='coerce').to_pydatetime()
+                    safe_date_val = pd.to_datetime(raw_date_val, errors='coerce', dayfirst=True).to_pydatetime()
                 except:
-                    pass # If parsing fails, keep today
+                    pass 
 
-        # ROBUST DEFAULTS DICT: Always include ALL keys to prevent KeyError
+        # ROBUST DEFAULTS DICT (Always define all keys)
         default_vals = {
-            "quotation_no": row_data.get("Quotation No", ""),
-            "po_huawei": row_data.get("Po Huawei", ""),
-            "linked_pr": row_data.get("Linked PR Subcon", ""),
-            "date_pr": safe_date_val, # Use safe value
-            "vendor_name": row_data.get("Vendor Name", ""),
+            "quotation_no": str(row_data.get("Quotation No", "")),
+            "po_huawei": str(row_data.get("Po Huawei", "")),
+            "linked_pr": str(row_data.get("Linked PR Subcon", "")),
+            "date_pr": safe_date_val,
+            "vendor_name": str(row_data.get("Vendor Name", "")),
             "project": proj_default,
-            "site_id": row_data.get("Site ID", ""),
-            "line_items": row_data.get("Line Items", ""),
-            "margin_reason": row_data.get("Margin Reason", ""), # Safe .get()
+            "site_id": str(row_data.get("Site ID", "")),
+            "line_items": str(row_data.get("Line Items", "")),
+            "margin_reason": str(row_data.get("Margin Reason", "")), # Safe .get() for Edit mode
             "status": row_data.get("Status", "Waiting"),
             "hp": float(row_data.get("Po Huawei (Unit Price)", 0.0)),
             "rq": int(row_data.get("Requested Qty", 0)),
@@ -267,12 +267,13 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
         btn_text = "💾 Update Row"
         btn_type = "primary"
     else:
+        # ADD MODE: Defaults
         default_vals = {
             "quotation_no": "",
             "po_huawei": "", "linked_pr": "", "date_pr": date.today(),
-            "vendor_name": "", "project": "---", "site_id": "", "line_items": "", "margin_reason": "",
+            "vendor_name": "", "project": "---", "site_id": "", "line_items": "", "margin_reason": "", # Empty string for Add mode
             "status": "Waiting",
-            "hp": 0.0, "rq": 0.0, "sp": 0.0, "sq": 0
+            "hp": 0.0, "rq": 0, "sp": 0.0, "sq": 0
         }
         btn_text = "➕ Add to Table"
         btn_type = "secondary"
@@ -286,16 +287,12 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
             po_huawei = st.text_input("PO Huawei*", value=default_vals["po_huawei"])
             linked_pr = st.text_input("Linked PR Subcon", value=default_vals["linked_pr"])
             
-            date_pr = st.date_input("Date of PR", value=default_vals["date_pr"])
+            date_pr = st.date_input("Date of PR", value=default_vals["date_pr"], format="DD/MM/YYYY")
         
         with col2:
             vendor_name = st.text_input("Vendor Name", value=default_vals["vendor_name"])
             
             site_id = st.text_input("Site ID", value=default_vals["site_id"])
-            
-            # Margin Reason Input
-            # MOVED: VISIBLE AREA TO FINANCIAL SECTION
-            margin_reason = st.text_area("Margin Reason (Why?)", value=default_vals["margin_reason"], height=70)
             
             status = st.selectbox("Status", ["Waiting", "Process", "Rejected", "Claimed"], 
                                   index=["Waiting", "Process", "Rejected", "Claimed"].index(default_vals["status"]) if default_vals["status"] in ["Waiting", "Process", "Rejected", "Claimed"] else 0)
@@ -313,6 +310,9 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
             req_qty = st.number_input("Requested Qty", value=default_vals["rq"], step=1)
             po_subcon_price = st.number_input("PO Subcon (Unit Price)", value=default_vals["sp"], format="%.2f")
             subcon_qty = st.number_input("Qty (Subcon)", value=default_vals["sq"], step=1)
+
+            # MOVED HERE: Margin Reason Text Area (Visible in Financials section)
+            margin_reason = st.text_area("Margin Reason", value=default_vals["margin_reason"], placeholder="e.g. Vendor raised price...", height=70)
 
         submitted = st.form_submit_button(btn_text, type=btn_type)
         cancel_edit = st.form_submit_button("Cancel Edit") if st.session_state.edit_index is not None else None
@@ -340,8 +340,15 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
                     is_low_margin = True
                     is_high_margin = False
 
-                # If user provided a reason, we prioritize it, otherwise use auto-status
-                final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
+                # IF EDIT MODE: Check Reason. IF ADD MODE: Default to 'Loss Risk'
+                if st.session_state.edit_index is not None:
+                    # In Edit mode, 'margin_reason' exists in default_vals
+                    final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
+                else:
+                    # In Add mode, 'margin_reason' is empty in default_vals
+                    # We default margin_status to 'Loss Risk' to prevent checking empty vars
+                    margin_status = "Loss Risk"
+                    final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
 
                 new_row = {
                     "Quotation No": quotation_no,
@@ -411,26 +418,30 @@ with st.container():
 if not st.session_state.df.empty:
     # FILTER LOGIC
     filtered_df = st.session_state.df.copy()
-    
+
     if filter_status != "All":
         filtered_df = filtered_df[filtered_df["Status"] == filter_status]
-    
+
     if search_project and not filtered_df.empty:
         filtered_df = filtered_df[filtered_df["Project"].str.contains(search_project, case=False, na=False)]
-            
+
     if search_vendor and not filtered_df.empty:
         filtered_df = filtered_df[filtered_df["Vendor Name"].str.contains(search_vendor, case=False, na=False)]
-    
+
     if search_site and not filtered_df.empty:
         filtered_df = filtered_df[filtered_df["Site ID"].str.contains(search_site, case=False, na=False)]
-    
+
     if margin_filter == "Loss Risk (<20%)":
         filtered_df = filtered_df[filtered_df["Margin%"] < 20.0]
     elif margin_filter == "Below Target (20-29%)":
         filtered_df = filtered_df[(filtered_df["Margin%"] >= 20.0) & (filtered_df["Margin%"] < 30.0)]
     elif margin_filter == "Healthy (≥30%)":
         filtered_df = filtered_df[filtered_df["Margin%"] >= 30.0]
-        
+
+    # --- FIX: Ensure 'Date of PR' is always pandas datetime64 for Arrow compatibility ---
+    if "Date of PR" in filtered_df.columns:
+        filtered_df["Date of PR"] = pd.to_datetime(filtered_df["Date of PR"], errors="coerce")
+
     st.caption(f"Showing {len(filtered_df)} of {len(st.session_state.df)} records")
 
     # TABLE STYLING
@@ -447,6 +458,7 @@ if not st.session_state.df.empty:
             return ''
 
     def color_text(val):
+        # Color text itself (Dark Green vs Dark Red) based on margin
         try:
             val_float = float(val)
             if val_float >= 30.0:
@@ -456,8 +468,9 @@ if not st.session_state.df.empty:
         except:
             return 'color: black'
 
-    styled_df = filtered_df.style.applymap(color_margin, subset=['Margin%']).applymap(color_text, subset=['Margin%'])
-    
+    # Use .map instead of deprecated .applymap
+    styled_df = filtered_df.style.map(color_margin, subset=['Margin%']).map(color_text, subset=['Margin%'])
+
     column_config = {
         "Date of PR": st.column_config.DateColumn("Date", format="DD/MM/YYYY"),
         "Po Huawei (Unit Price)": st.column_config.NumberColumn("Price (RM)", format="%.2f"),
@@ -586,7 +599,7 @@ with col_dl:
                     except:
                         pass
                 elif cell_header == "Date of PR":
-                    cell.number_format = 'YYYY-MM-DD'
+                    cell.number_format = 'DD/MM/YYYY'
                 else:
                     cell.number_format = 'General'
 
