@@ -255,6 +255,10 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
             elif isinstance(raw_date_val, date):
                 safe_date_val = raw_date_val
 
+        # Ensure date is always in dd/mm/yyyy format for the form
+        if isinstance(safe_date_val, pd.Timestamp):
+            safe_date_val = safe_date_val.date()
+
         # ROBUST DEFAULTS DICT (Always define all keys)
         default_vals = {
             "quotation_no": str(row_data.get("Quotation No", "")),
@@ -295,7 +299,14 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
             po_huawei = st.text_input("PO Huawei*", value=default_vals["po_huawei"])
             linked_pr = st.text_input("Linked PR Subcon", value=default_vals["linked_pr"])
             
-            date_pr = st.date_input("Date of PR", value=default_vals["date_pr"], format="DD/MM/YYYY")
+            # Ensure date is always shown as dd/mm/yyyy in the widget
+            date_value = default_vals["date_pr"]
+            if isinstance(date_value, str):
+                try:
+                    date_value = pd.to_datetime(date_value, dayfirst=True).date()
+                except:
+                    date_value = date.today()
+            date_pr = st.date_input("Date of PR", value=date_value, format="DD/MM/YYYY")
         
         with col2:
             vendor_name = st.text_input("Vendor Name", value=default_vals["vendor_name"])
@@ -527,8 +538,12 @@ col_dl, col_clr = st.columns(2)
 
 with col_dl:
     buffer = io.BytesIO()
+    # Ensure 'Date of PR' is formatted as dd/mm/yyyy before export
+    export_df = st.session_state.df.copy()
+    if 'Date of PR' in export_df.columns:
+        export_df['Date of PR'] = pd.to_datetime(export_df['Date of PR'], errors='coerce').dt.strftime('%d/%m/%Y')
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        st.session_state.df.to_excel(writer, index=False, sheet_name='Master File')
+        export_df.to_excel(writer, index=False, sheet_name='Master File')
         
         workbook = writer.book
         worksheet = workbook['Master File']
