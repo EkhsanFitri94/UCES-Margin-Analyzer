@@ -239,13 +239,21 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
         # SAFE DATE RETRIEVAL
         raw_date_val = row_data.get("Date of PR")
         safe_date_val = date.today()
-        
         if pd.notna(raw_date_val):
             if isinstance(raw_date_val, str):
                 try:
-                    safe_date_val = pd.to_datetime(raw_date_val, errors='coerce', dayfirst=True).to_pydatetime()
+                    parsed = pd.to_datetime(raw_date_val, errors='coerce', dayfirst=True)
+                    if pd.notna(parsed):
+                        safe_date_val = parsed.date()
                 except:
-                    pass 
+                    pass
+            elif hasattr(raw_date_val, 'date'):
+                try:
+                    safe_date_val = raw_date_val.date()
+                except:
+                    safe_date_val = raw_date_val
+            elif isinstance(raw_date_val, date):
+                safe_date_val = raw_date_val
 
         # ROBUST DEFAULTS DICT (Always define all keys)
         default_vals = {
@@ -329,26 +337,13 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
                 # --- AUTO-FLAG LOGIC ---
                 if margin >= 30.0:
                     margin_status = "Healthy"
-                    is_low_margin = False
-                    is_high_margin = True
                 elif margin >= 20.0:
                     margin_status = "Below Target"
-                    is_low_margin = True
-                    is_high_margin = False
                 else:
                     margin_status = "Loss Risk"
-                    is_low_margin = True
-                    is_high_margin = False
 
-                # IF EDIT MODE: Check Reason. IF ADD MODE: Default to 'Loss Risk'
-                if st.session_state.edit_index is not None:
-                    # In Edit mode, 'margin_reason' exists in default_vals
-                    final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
-                else:
-                    # In Add mode, 'margin_reason' is empty in default_vals
-                    # We default margin_status to 'Loss Risk' to prevent checking empty vars
-                    margin_status = "Loss Risk"
-                    final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
+                # Use margin_status for both add and edit
+                final_status_text = margin_reason.strip() if margin_reason.strip() != "" else margin_status
 
                 new_row = {
                     "Quotation No": quotation_no,
@@ -378,8 +373,7 @@ with st.expander(f"{form_mode}", expanded=(st.session_state.edit_index is not No
                 else:
                     st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
                     st.success("Entry added successfully!")
-                
-                save_data() 
+                save_data()
                 st.rerun()
         
         if cancel_edit:
